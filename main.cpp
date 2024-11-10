@@ -1,9 +1,9 @@
 #include <iostream>
 #include <vector>
-#include <stack>
 #include <tuple>
-#include <string>
-#include <unordered_map>
+#include <queue>
+#include <climits>
+#include <algorithm>
 
 using namespace std;
 
@@ -11,18 +11,21 @@ class CashFlowMinimizer {
 public:
     void displayWelcomeMessage();
     void createUsers(vector<string>& users);
-    void addDebt(vector<tuple<int, int, int>>& transactions, stack<vector<tuple<int, int, int>>>& transactionHistory);
+    void addDebt(vector<tuple<int, int, int>>& transactions);
     void displayTransactions(const vector<tuple<int, int, int>>& transactions);
-    void undoLastTransaction(vector<tuple<int, int, int>>& transactions, stack<vector<tuple<int, int, int>>>& transactionHistory);
     void minimizeTransactions(const vector<tuple<int, int, int>>& transactions, const vector<string>& users);
-    bool validateInput(int lender, int borrower, int amount);
     void displayMenu();
+    
+private:
+    bool validateInput(int lender, int borrower, int amount);
+    bool spfa(int source, int sink, vector<int>& dist, vector<int>& parent, vector<vector<int>>& capacity, vector<vector<int>>& cost, int numUsers);
+    void minCostMaxFlow(int source, int sink, vector<vector<int>>& capacity, vector<vector<int>>& cost, const vector<string>& users, int numUsers);
 };
 
 void CashFlowMinimizer::displayWelcomeMessage() {
     cout << "------------------ Cash Flow Minimizer ------------------\n";
     cout << "Welcome to the Cash Flow Minimizer Program!\n";
-    cout << "This program helps manage transactions and minimize cash flow.\n";
+    cout << "This program helps manage transactions and minimize cash flow using advanced graph algorithms.\n";
 }
 
 void CashFlowMinimizer::createUsers(vector<string>& users) {
@@ -32,18 +35,17 @@ void CashFlowMinimizer::createUsers(vector<string>& users) {
     users.resize(numUsers);
 
     for (int i = 0; i < numUsers; ++i) {
-        cout << "Enter name for User " << i << ": ";
+        cout << "Enter name for User " << i + 1 << ": ";
         cin >> users[i];
     }
 }
 
-void CashFlowMinimizer::addDebt(vector<tuple<int, int, int>>& transactions, stack<vector<tuple<int, int, int>>>& transactionHistory) {
+void CashFlowMinimizer::addDebt(vector<tuple<int, int, int>>& transactions) {
     int lender, borrower, amount;
     cout << "Enter lender ID, borrower ID, and amount: ";
     cin >> lender >> borrower >> amount;
 
     if (validateInput(lender, borrower, amount)) {
-        transactionHistory.push(transactions);  // Save current state for undo functionality
         transactions.push_back(make_tuple(lender, borrower, amount));
     }
 }
@@ -58,22 +60,68 @@ void CashFlowMinimizer::displayTransactions(const vector<tuple<int, int, int>>& 
     }
 }
 
-void CashFlowMinimizer::undoLastTransaction(vector<tuple<int, int, int>>& transactions, stack<vector<tuple<int, int, int>>>& transactionHistory) {
-    if (!transactionHistory.empty()) {
-        transactions = transactionHistory.top();
-        transactionHistory.pop();
-        cout << "Last transaction undone.\n";
-    } else {
-        cout << "No transactions to undo.\n";
-    }
-}
-
 bool CashFlowMinimizer::validateInput(int lender, int borrower, int amount) {
     if (lender < 0 || borrower < 0 || amount <= 0) {
         cout << "Invalid input: Lender and borrower IDs should be non-negative, and amount should be positive.\n";
         return false;
     }
     return true;
+}
+
+bool CashFlowMinimizer::spfa(int source, int sink, vector<int>& dist, vector<int>& parent, vector<vector<int>>& capacity, vector<vector<int>>& cost, int numUsers) {
+    vector<bool> inQueue(numUsers, false);
+    dist.assign(numUsers, INT_MAX);
+    parent.assign(numUsers, -1);
+
+    dist[source] = 0;
+    queue<int> q;
+    q.push(source);
+    inQueue[source] = true;
+
+    while (!q.empty()) {
+        int u = q.front();
+        q.pop();
+        inQueue[u] = false;
+
+        for (int v = 0; v < numUsers; ++v) {
+            if (capacity[u][v] > 0 && dist[u] + cost[u][v] < dist[v]) {
+                dist[v] = dist[u] + cost[u][v];
+                parent[v] = u;
+                if (!inQueue[v]) {
+                    q.push(v);
+                    inQueue[v] = true;
+                }
+            }
+        }
+    }
+    return dist[sink] < INT_MAX;
+}
+
+void CashFlowMinimizer::minCostMaxFlow(int source, int sink, vector<vector<int>>& capacity, vector<vector<int>>& cost, const vector<string>& users, int numUsers) {
+    int totalFlow = 0;
+    int totalCost = 0;
+    
+    vector<int> dist(numUsers), parent(numUsers);
+    
+    while (spfa(source, sink, dist, parent, capacity, cost, numUsers)) {
+        int pathFlow = INT_MAX;
+        for (int v = sink; v != source; v = parent[v]) {
+            int u = parent[v];
+            pathFlow = min(pathFlow, capacity[u][v]);
+        }
+        
+        // Update capacities and total cost
+        for (int v = sink; v != source; v = parent[v]) {
+            int u = parent[v];
+            capacity[u][v] -= pathFlow;
+            capacity[v][u] += pathFlow;
+            totalCost += pathFlow * cost[u][v];
+        }
+        totalFlow += pathFlow;
+    }
+
+    cout << "\nTotal Flow: " << totalFlow << "\n";
+    cout << "Total Minimized Cost: " << totalCost << "\n";
 }
 
 void CashFlowMinimizer::minimizeTransactions(const vector<tuple<int, int, int>>& transactions, const vector<string>& users) {
@@ -89,38 +137,24 @@ void CashFlowMinimizer::minimizeTransactions(const vector<tuple<int, int, int>>&
         balance[borrower] -= amount;  // Borrower owes
     }
 
-    // Step 2: Separate users into creditors and debtors
-    vector<pair<int, int>> creditors, debtors;
+    // Step 2: Build a graph and apply Min-Cost Max-Flow algorithm
+    vector<vector<int>> capacity(numUsers, vector<int>(numUsers, 0));
+    vector<vector<int>> cost(numUsers, vector<int>(numUsers, 0));
+
+    // Create a flow network: capacity and cost
     for (int i = 0; i < numUsers; ++i) {
-        if (balance[i] > 0) creditors.emplace_back(i, balance[i]);
-        else if (balance[i] < 0) debtors.emplace_back(i, -balance[i]);
+        for (int j = 0; j < numUsers; ++j) {
+            if (i != j && balance[i] > 0 && balance[j] < 0) {
+                capacity[i][j] = abs(balance[j]);
+                cost[i][j] = 1;  // You can change this to be more realistic
+            }
+        }
     }
 
-    // Step 3: Minimize transactions by matching creditors with debtors
-    vector<tuple<int, int, int>> minimizedTransactions;
-    int i = 0, j = 0;
-    while (i < creditors.size() && j < debtors.size()) {
-        int creditor = creditors[i].first;
-        int debtor = debtors[j].first;
-        int amount = min(creditors[i].second, debtors[j].second);
-
-        minimizedTransactions.push_back(make_tuple(debtor, creditor, amount));
-
-        creditors[i].second -= amount;
-        debtors[j].second -= amount;
-
-        if (creditors[i].second == 0) i++;
-        if (debtors[j].second == 0) j++;
-    }
-
-    // Step 4: Display minimized transactions
-    cout << "\nMinimized Transactions:\n";
-    for (const auto& transaction : minimizedTransactions) {
-        int lender = get<1>(transaction);    // Lender's ID
-        int borrower = get<0>(transaction);  // Borrower's ID
-        int amount = get<2>(transaction);    // Amount to transfer
-        cout << "User " << users[borrower] << " owes " << amount << " to User " << users[lender] << endl;
-    }
+    // Apply Min-Cost Max-Flow to minimize the transactions
+    int source = 0;
+    int sink = numUsers - 1;
+    minCostMaxFlow(source, sink, capacity, cost, users, numUsers);
 }
 
 void CashFlowMinimizer::displayMenu() {
@@ -128,29 +162,25 @@ void CashFlowMinimizer::displayMenu() {
     cout << "1. Add Debt\n";
     cout << "2. Display Transactions\n";
     cout << "3. Display Minimized Transactions\n";
-    cout << "4. Undo Last Transaction\n";
-    cout << "5. Display Transaction History\n";
-    cout << "6. Exit\n";
+    cout << "4. Exit\n";
     cout << "Enter your choice: ";
 }
 
 int main() {
     vector<string> users;
     vector<tuple<int, int, int>> transactions;
-    stack<vector<tuple<int, int, int>>> transactionHistory;
     CashFlowMinimizer cfm;
 
     cfm.displayWelcomeMessage();
     cfm.createUsers(users);
 
-    // Ask user for the number of transactions to enter
     int numTransactions;
     cout << "Enter the number of transactions: ";
     cin >> numTransactions;
 
     for (int i = 0; i < numTransactions; ++i) {
         cout << "Transaction " << (i + 1) << ":\n";
-        cfm.addDebt(transactions, transactionHistory);
+        cfm.addDebt(transactions);
     }
 
     int choice;
@@ -160,7 +190,7 @@ int main() {
 
         switch (choice) {
             case 1:
-                cfm.addDebt(transactions, transactionHistory);
+                cfm.addDebt(transactions);
                 break;
             case 2:
                 cfm.displayTransactions(transactions);
@@ -169,19 +199,13 @@ int main() {
                 cfm.minimizeTransactions(transactions, users);
                 break;
             case 4:
-                cfm.undoLastTransaction(transactions, transactionHistory);
-                break;
-            case 5:
-                cfm.displayTransactions(transactions);
-                break;
-            case 6:
                 cout << "Exiting...\n";
                 break;
             default:
                 cout << "Invalid choice. Try again.\n";
                 break;
         }
-    } while (choice != 6);
+    } while (choice != 4);
 
     return 0;
 }
